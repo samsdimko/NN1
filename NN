@@ -7,7 +7,7 @@ AUTOTUNE = tf.data.experimental.AUTOTUNE
 import pathlib
 from pathlib import Path
 
-data_root = Path("/media/dmitry/4fe10f4c-fb9e-4f6c-870b-18e4796d5d8b/images/images")
+data_root = Path("/home/dmirty/images/images")
 
 print(data_root)
 
@@ -22,23 +22,8 @@ all_image_paths = [str(path) for path in all_image_paths]
 random.shuffle(all_image_paths)
 
 image_count = len(all_image_paths)
-image_count
-
 
 import os
-attributions = (data_root)
-attributions = [line.split(' CC-BY') for line in attributions]
-attributions = dict(attributions)
-
-
-import IPython.display as display
-
-
-for n in range(3):
-    image_path = random.choice(all_image_paths)
-    display.display(display.Image(image_path))
-    print(caption_image(image_path))
-    print()
 
 label_names = sorted(item.name for item in data_root.glob('*/') if item.is_dir())
 label_to_index = dict((name, index) for index, name in enumerate(label_names))
@@ -47,14 +32,9 @@ label_to_index
 all_image_labels = [label_to_index[pathlib.Path(path).parent.name]
                     for path in all_image_paths]
 
-print("First 10 labels indices: ", all_image_labels[:10])
-
 
 img_path = all_image_paths[0]
-img_path
 img_raw = tf.io.read_file(img_path)
-print(repr(img_raw)[:100]+"...")
-
 
 img_tensor = tf.image.decode_image(img_raw)
 
@@ -62,7 +42,7 @@ print(img_tensor.shape)
 print(img_tensor.dtype)
 
 
-img_final = tf.image.resize(img_tensor, [500, 500])
+img_final = tf.image.resize(img_tensor, [150, 150])
 img_final = img_final/255.0
 print(img_final.shape)
 print(img_final.numpy().min())
@@ -71,7 +51,7 @@ print(img_final.numpy().max())
 
 def preprocess_image(image):
     image = tf.image.decode_jpeg(image, channels=3)
-    image = tf.image.resize(image, [192, 192])
+    image = tf.image.resize(image, [150, 150])
     image /= 255.0 
 
     return image
@@ -91,7 +71,6 @@ plt.imshow(load_and_preprocess_image(img_path))
 plt.grid(False)
 plt.xlabel(img_path)
 plt.title(label_names[label].title())
-print()
 
 path_ds = tf.data.Dataset.from_tensor_slices(all_image_paths)
 print(path_ds)
@@ -102,14 +81,7 @@ image_ds = path_ds.map(load_and_preprocess_image, num_parallel_calls=AUTOTUNE)
 import matplotlib.pyplot as plt
 
 plt.figure(figsize=(8,8))
-for n, image in enumerate(image_ds.take(4)):
-    plt.subplot(2,2,n+1)
-    plt.imshow(image)
-    plt.grid(False)
-    plt.xticks([])
-    plt.yticks([])
-    plt.xlabel(all_image_paths[n])
-    plt.show()
+
 
 
 label_ds = tf.data.Dataset.from_tensor_slices(tf.cast(all_image_labels, tf.int64))
@@ -130,7 +102,7 @@ def load_and_preprocess_from_path_label(path, label):
 image_label_ds = ds.map(load_and_preprocess_from_path_label)
 image_label_ds
 
-BATCH_SIZE = 32
+BATCH_SIZE = 10
 
 
 ds = image_label_ds.shuffle(buffer_size=image_count)
@@ -146,48 +118,30 @@ ds = ds.prefetch(buffer_size=AUTOTUNE)
 ds
 
 
-mobile_net = tf.keras.applications.MobileNetV2(input_shape=(192, 192, 3), include_top=False)
+def change_range(image,label):
+  return 2*image-1, label
+
+mobile_net = tf.keras.applications.MobileNetV2(input_shape=(150, 150, 3), include_top=False)
 mobile_net.trainable=False
 
 
-def change_range(image,label):
-    return 2*image-1, label
-
 keras_ds = ds.map(change_range)
-
-
 image_batch, label_batch = next(iter(keras_ds))
+model = tf.keras.Sequential([
+  mobile_net,
+  tf.keras.layers.GlobalAveragePooling2D(),
+  tf.keras.layers.Dense(len(label_names), activation = 'softmax')])
+logit_batch = model(image_batch).numpy()
+model.compile(optimizer=tf.keras.optimizers.Adam(),
+              loss='sparse_categorical_crossentropy',
+              metrics=["accuracy"])
+model.summary()
+steps_per_epoch=tf.math.ceil(len(all_image_paths)/BATCH_SIZE).numpy()
+steps_per_epoch
 
 
+history = model.fit(ds, epochs=50, steps_per_epoch=10)
 
-from tensorflow.keras.datasets import cifar10
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout, Activation, Flatten
-from tensorflow.keras.layers import Conv2D, MaxPooling2D
 
-model = Sequential()
-model.add(Conv2D(1024, (3, 3)))
-model.add(Activation("relu"))
-model.add(MaxPooling2D(pool_size=(2,2)))
-
-model.add(Conv2D(256, (3, 3)))
-model.add(Activation("relu"))
-model.add(MaxPooling2D(pool_size=(2,2)))
-
-model.add(Conv2D(256, (3, 3)))
-model.add(Activation("relu"))
-model.add(MaxPooling2D(pool_size=(2,2)))
-model.add(Dropout(0.25))
-
-model.add(Flatten())
-model.add(Dense(128))
-model.add(Activation("relu"))
-
-model.add(Dense(128))
-model.add(Activation("relu"))
-model.add(Dense(13))
-model.add(Activation("softmax"))
-model.compile(loss="sparse_categorical_crossentropy",optimizer="adam",metrics=["accuracy"])
-
-history = model.fit(ds, batch_size=32, epochs=40, validation_split=0.1)
+import logging
+logging.getLogger().setLevel(logging.INFO)
